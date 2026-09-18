@@ -1,5 +1,7 @@
 # bonsai-vllm
 
+> **Work in progress.** Expect rough edges and breaking changes.
+
 Serves [Bonsai 2 27B](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-mlx-2bit), Prism ML's ternary Qwen3.8-27B, on vLLM with custom CUDA kernels. Unofficial; not affiliated with Prism ML.
 
 ```bash

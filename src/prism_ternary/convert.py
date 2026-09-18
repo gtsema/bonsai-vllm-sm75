@@ -13,16 +13,7 @@ from safetensors.torch import save_file
 from prism_ternary.kernels import GROUP, HADAMARD_BLOCK, LANES
 from prism_ternary.quant import QUANT_METHOD, pack_signs
 
-AUX_FILES = (
-    "generation_config.json",
-    "tokenizer.json",
-    "tokenizer_config.json",
-    "vocab.json",
-    "merges.txt",
-    "chat_template.jinja",
-    "preprocessor_config.json",
-    "video_preprocessor_config.json",
-)
+AUX_FILES = ("generation_config.json", "tokenizer.json", "tokenizer_config.json")
 VERIFY_MODULES = (
     "model.layers.0.linear_attn.in_proj_qkv",
     "model.layers.0.linear_attn.in_proj_z",
