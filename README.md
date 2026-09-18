@@ -3,7 +3,7 @@
 Serves [Bonsai 2 27B](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-mlx-2bit), Prism ML's ternary Qwen3.8-27B, on vLLM with custom CUDA kernels. Unofficial; not affiliated with Prism ML.
 
 ```bash
-docker run --rm --gpus all --ipc=host -p 8000:8000 -v bonsai:/cache fraserprice/bonsai-vllm:20260918
+docker run --rm --gpus all --ipc=host -p 8000:8000 -v bonsai:/cache fraserpricee/bonsai-vllm:20260918
 ```
 
 That pulls the image, downloads the 9.6 GB [weights](https://huggingface.co/fraserprice/Ternary-Bonsai-2-27B-vllm) into the `bonsai` volume, and serves an OpenAI-compatible API for `Bonsai-2-27B` on port 8000 with 262K context, tool calling, reasoning and MTP speculative decoding. Arguments after the image name go to `vllm serve` and override the defaults, e.g. `--max-model-len 32768`. The first start takes about 3 minutes (download aside) while vLLM compiles and captures CUDA graphs.
