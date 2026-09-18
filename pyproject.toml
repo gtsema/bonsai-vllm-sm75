@@ -1,0 +1,27 @@
+[project]
+name = "prism-ternary"
+version = "0.1.0"
+description = "vLLM plugin for Prism ML ternary (Bonsai) checkpoints: 2-bit packed weights with folded Hadamard rotation"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Fraser Price" }]
+requires-python = ">=3.12"
+dependencies = ["vllm>=0.25.1", "torch", "triton", "numpy", "safetensors", "pydantic>=2"]
+
+[project.urls]
+Repository = "https://github.com/fraserprice/bonsai-vllm"
+Weights = "https://huggingface.co/fraserprice/Ternary-Bonsai-2-27B-vllm"
+
+[project.scripts]
+prism-ternary-convert = "prism_ternary.convert:main"
+
+[project.entry-points."vllm.general_plugins"]
+prism_ternary = "prism_ternary.quant:register"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/prism_ternary"]
