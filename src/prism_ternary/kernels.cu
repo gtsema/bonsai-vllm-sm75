@@ -1,4 +1,5 @@
 #include <ATen/cuda/CUDAContext.h>
+#include <cstdint>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <torch/extension.h>
@@ -20,9 +21,38 @@ __device__ __forceinline__ uint32_t bf16_bits(int value) {
     return value < 0 ? 0xBF80u : (value > 0 ? 0x3F80u : 0u);
 }
 
+// Turing (SM75) has FP16 Tensor Cores but no BF16 Tensor Cores.  The original
+// kernel feeds BF16 fragments directly to the Ampere+ BF16 MMA instruction.
+// For SM75 we convert each BF16 pair to FP16 in registers and use the
+// corresponding FP16 Tensor Core instruction.  Accumulation remains FP32.
+__device__ __forceinline__ uint16_t bf16_to_fp16_bits(uint16_t bits) {
+    const float value = __uint_as_float(static_cast<uint32_t>(bits) << 16);
+    return __half_as_ushort(__float2half_rn(value));
+}
+
+__device__ __forceinline__ uint32_t bf16_pair_to_fp16_pair(uint32_t bits) {
+    const uint16_t lo = bf16_to_fp16_bits(static_cast<uint16_t>(bits));
+    const uint16_t hi = bf16_to_fp16_bits(static_cast<uint16_t>(bits >> 16));
+    return static_cast<uint32_t>(lo) | (static_cast<uint32_t>(hi) << 16);
+}
+
+__device__ __forceinline__ uint32_t fp16_bits(int value) {
+    return static_cast<uint32_t>(__half_as_ushort(__float2half_rn(static_cast<float>(value))));
+}
+
+#if __CUDA_ARCH__ >= 800
 __device__ __forceinline__ void mma_bf16(float* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t b0, uint32_t b1) {
     asm volatile(
         "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
+        : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
+        : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
+}
+
+#endif
+
+__device__ __forceinline__ void mma_fp16(float* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t b0, uint32_t b1) {
+    asm volatile(
+        "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
         : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
         : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
 }
@@ -38,7 +68,13 @@ __global__ void __launch_bounds__(kThreads) ternary_mma_kernel(
     int K,
     int groups_per_split) {
     __shared__ uint32_t lut[16];
-    if (threadIdx.x < 16) lut[threadIdx.x] = bf16_bits((threadIdx.x & 3) - 1) | (bf16_bits((threadIdx.x >> 2) - 1) << 16);
+    if (threadIdx.x < 16) {
+#if __CUDA_ARCH__ >= 800
+        lut[threadIdx.x] = bf16_bits((threadIdx.x & 3) - 1) | (bf16_bits((threadIdx.x >> 2) - 1) << 16);
+#else
+        lut[threadIdx.x] = fp16_bits((threadIdx.x & 3) - 1) | (fp16_bits((threadIdx.x >> 2) - 1) << 16);
+#endif
+    }
     __syncthreads();
     const int groups = K / 128;
     const int warp = threadIdx.x >> 5;
@@ -110,10 +146,21 @@ __global__ void __launch_bounds__(kThreads) ternary_mma_kernel(
 #pragma unroll
                 for (int t = 0; t < kTilesPerWarp; ++t) {
                     const uint32_t word = j == 0 ? cur[t][h].x : (j == 1 ? cur[t][h].y : (j == 2 ? cur[t][h].z : cur[t][h].w));
-                    const uint32_t b0 = lut[(word >> (4 * tig)) & 0xFu];
-                    const uint32_t b1 = lut[(word >> (4 * tig + 16)) & 0xFu];
+                    uint32_t b0 = lut[(word >> (4 * tig)) & 0xFu];
+                    uint32_t b1 = lut[(word >> (4 * tig + 16)) & 0xFu];
 #pragma unroll
-                    for (int b = 0; b < kMBlocks; ++b) mma_bf16(ctmp[t][b], a[b][0], a[b][1], a[b][2], a[b][3], b0, b1);
+                    for (int b = 0; b < kMBlocks; ++b) {
+#if __CUDA_ARCH__ >= 800
+                        mma_bf16(ctmp[t][b], a[b][0], a[b][1], a[b][2], a[b][3], b0, b1);
+#else
+                        mma_fp16(ctmp[t][b],
+                                 bf16_pair_to_fp16_pair(a[b][0]),
+                                 bf16_pair_to_fp16_pair(a[b][1]),
+                                 bf16_pair_to_fp16_pair(a[b][2]),
+                                 bf16_pair_to_fp16_pair(a[b][3]),
+                                 b0, b1);
+#endif
+                    }
                 }
             }
         }

@@ -54,7 +54,9 @@ class PrismTernaryConfig(QuantizationConfig):
 
     @classmethod
     def get_min_capability(cls) -> int:
-        return 80
+        # SM75 (Turing) is supported by the FP16 Tensor Core fallback in
+        # kernels.cu. SM80+ keeps the original BF16 Tensor Core path.
+        return 75
 
     @staticmethod
     def get_config_filenames() -> list[str]:

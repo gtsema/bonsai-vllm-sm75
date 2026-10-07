@@ -1,6 +1,6 @@
 FROM vllm/vllm-openai:v0.25.1@sha256:e4f88a835143cd22aee2397a26ec6bb80b3a4a6fe0c882bcbc63822904766089
 
-ENV TORCH_CUDA_ARCH_LIST="8.0 8.6 8.9 9.0 10.0 12.0" \
+ENV TORCH_CUDA_ARCH_LIST="7.5 8.0 8.6 8.9 9.0 10.0 12.0" \
   TORCH_EXTENSIONS_DIR=/opt/torch_extensions \
   HF_HOME=/cache/huggingface \
   VLLM_CACHE_ROOT=/cache/vllm \
