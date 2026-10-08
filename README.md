@@ -1,53 +1,109 @@
-# bonsai-vllm
+# Bonsai 2 27B via vLLM on RTX 2080 Ti (SM75)
 
-> **Work in progress.** Expect rough edges and breaking changes.
+## Что это
 
-Serves [Bonsai 2 27B](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-mlx-2bit), Prism ML's ternary Qwen3.8-27B, on vLLM with custom CUDA kernels. Unofficial; not affiliated with Prism ML.
+Форк `fraserprice/Ternary-Bonsai-2-27B-vllm`, адаптированный под инференс на NVIDIA **RTX 2080 Ti (22vram)** (compute capability 7.5 / SM75).
 
-```bash
-docker run --rm --gpus all --ipc=host -p 8000:8000 -v bonsai:/cache fraserpricee/bonsai-vllm:20260918
-```
+Оригинальный checkpoint vLLM рассчитан на новые GPU (SM80+): RTX 2080 Ti не поддерживает нативное BF16 и FlashAttention 2. В этой версии кастомное тринарное CUDA-расширение Prism было изменено, чтобы активации и MMA-пути работали в **FP16** на SM75. Веса по-прежнему тринарные. На практике модель работает через **vLLM 0.25.1** в Docker.
 
-That pulls the image, downloads the 9.6 GB [weights](https://huggingface.co/fraserprice/Ternary-Bonsai-2-27B-vllm) into the `bonsai` volume, and serves an OpenAI-compatible API for `Bonsai-2-27B` on port 8000 with 262K context, tool calling, reasoning and MTP speculative decoding. Arguments after the image name go to `vllm serve` and override the defaults, e.g. `--max-model-len 32768`. The first start takes about 3 minutes (download aside) while vLLM compiles and captures CUDA graphs.
+## Как запустить
 
-The image is built and tested for the RTX PRO 6000 Blackwell only; other NVIDIA GPUs are untested and may not work. If you hit a problem, please [open an issue](https://github.com/fraserprice/bonsai-vllm/issues).
-
-## Throughput
-
-Aggregate tokens/s across all concurrent requests on one RTX PRO 6000 Blackwell Max-Q (96 GB), ~2K generated tokens per request:
-
-| Prompt | Concurrent requests | Prefill | Decode |
-| --- | --- | --- | --- |
-| 1K tokens | 1 | 2,150 | 198 |
-| 1K tokens | 4 | 3,808 | 350 |
-| 1K tokens | 8 | 3,990 | 515 |
-| 10K tokens | 1 | 4,014 | 115 |
-| 10K tokens | 4 | 4,089 | 222 |
-| 10K tokens | 8 | 4,089 | 262 |
-
-## Without Docker
-
-Into an environment with vLLM 0.25.1 and the CUDA 13 toolkit (`nvcc`, which compiles the kernels on first use):
+Сборка образов:
 
 ```bash
-pip install git+https://github.com/fraserprice/bonsai-vllm
-vllm serve fraserprice/Ternary-Bonsai-2-27B-vllm --language-model-only \
-  --speculative-config '{"method":"mtp","num_speculative_tokens":7}'
+sudo docker build --no-cache -t bonsai-vllm-sm75 .
 ```
 
-## How it works
+Кэши (опционально, но настоятельно рекомендуется — без них каждый запуск скачивает модель и компилирует ядра заново):
 
-`prism_ternary` is a vLLM quantization plugin, under `src/prism_ternary`:
+```bash
+sudo mkdir -p /opt/bonsai-cache/huggingface /opt/bonsai-cache/vllm
+sudo chown -R $USER:$USER /opt/bonsai-cache
+```
 
-- `quant.py` registers the `prism_ternary` method: linear layers and the LM head hold 2-bit codes (16 per int32) with one FP16 scale per group of 128, re-laid out at load into the blocks the kernel reads. The MTP drafter runs in online FP8.
-- `kernels.cu` has the two CUDA kernels: the blockwise signed Hadamard transform (block 1024) that rotates activations into the weights' basis, and a ternary GEMM that consumes the packed weights directly for up to 64 rows (decode and MTP verification).
-- `kernels.py` wraps them as one `torch.compile`-friendly custom op; larger batches (prefill) dequantize with a Triton kernel and use a dense matmul.
-- `convert.py` (`prism-ternary-convert --pack <mlx pack> --base <Qwen3.8-27B> --out <dir>`) builds the vLLM checkpoint from Prism ML's MLX pack, and checks every tensor's layout against the base model as it goes. Only the MTP head, which the pack doesn't carry, comes from the base model.
+Запуск:
 
-## Credits
+```bash
+sudo docker run --gpus '"device=0"' -it --rm \
+  --ipc=host \
+  -p 8000:8000 \
+  -v /opt/bonsai-cache/huggingface:/cache/huggingface \
+  -v /opt/bonsai-cache/vllm:/cache/vllm \
+  bonsai-vllm-sm75 \
+  --model fraserprice/Ternary-Bonsai-2-27B-vllm \
+  --served-model-name Bonsai-2-27B \
+  --tensor-parallel-size 1 \
+  --max-model-len 130000 \
+  --max-num-seqs 1 \
+  --max-num-batched-tokens 512 \
+  --gpu-memory-utilization 0.95 \
+  --language-model-only \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+```
 
-- [Prism ML](https://prismml.com) for Bonsai 2 27B. Created using Bonsai by Prism ML.
-- [Qwen](https://huggingface.co/Qwen/Qwen3.8-27B) for Qwen3.8-27B, which Bonsai is built from.
-- [vLLM](https://github.com/vllm-project/vllm), which the image is built on.
+После запуска доступна OpenAI-совместимая API на `http://127.0.0.1:8000/v1/chat/completions`, с поддержкой tool calling. Первый старт медленный (компиляция едра, ~7 минут), дальше — быстрее благодаря кэшу.
 
-Apache 2.0, as are all of the above. See `LICENSE` and `NOTICE`.
+## Сравнение с llama.cpp
+
+| Runtime | Формат модели | Скорость | Контекст |
+|---|---|---:|---:|
+| vLLM (этот форк) | `Ternary-Bonsai-2-27B-vllm` | ~30 tok/s | ~130K |
+| llama.cpp (PrismML) | `Ternary-Bonsai-2-27B-PQ2_0.gguf` | ~25 tok/s | ~245K |
+
+Оба варианта — это одна и та же модель (Bonsai 2 27B), только разные представления весов под разные рантаймы; слово в слово выводы между ними не совпадут.
+---
+
+# Bonsai 2 27B with vLLM on RTX 2080 Ti (SM75)
+
+## What it is
+
+A fork of `fraserprice/Ternary-Bonsai-2-27B-vllm` adapted for inference on **NVIDIA RTX 2080 Ti (22vram)** (compute capability 7.5 / SM75).
+
+The upstream vLLM checkpoint targets newer GPUs (SM80+): the RTX 2080 Ti does not support native BF16 or FlashAttention 2. In this version the custom Prism ternary CUDA extension was changed so the activation and MMA paths run in **FP16** on SM75. The weights remain ternary. The model runs through **vLLM 0.25.1** in Docker.
+
+## How to run
+
+Build the image:
+
+```bash
+sudo docker build --no-cache -t bonsai-vllm-sm75 .
+```
+
+Caches (optional but strongly recommended — without them every run re-downloads the model and recompiles kernels):
+
+```bash
+sudo mkdir -p /opt/bonsai-cache/huggingface /opt/bonsai-cache/vllm
+sudo chown -R $USER:$USER /opt/bonsai-cache
+```
+
+Launch:
+
+```bash
+sudo docker run --gpus '"device=0"' -it --rm \
+  --ipc=host \
+  -p 8000:8000 \
+  -v /opt/bonsai-cache/huggingface:/cache/huggingface \
+  -v /opt/bonsai-cache/vllm:/cache/vllm \
+  bonsai-vllm-sm75 \
+  --model fraserprice/Ternary-Bonsai-2-27B-vllm \
+  --served-model-name Bonsai-2-27B \
+  --tensor-parallel-size 1 \
+  --max-model-len 130000 \
+  --max-num-seqs 1 \
+  --max-num-batched-tokens 512 \
+  --gpu-memory-utilization 0.95 \
+  --language-model-only \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+```
+
+An OpenAI-compatible API is exposed on `http://127.0.0.1:8000/v1/chat/completions`, with tool calling enabled. The first startup is slow (kernel compilation, ~7 minutes); subsequent ones are faster thanks to the cache.
+
+## Comparison with llama.cpp
+
+| Runtime | Model format | Speed | Context |
+|---|---|---:|---:|
+| vLLM (this fork) | `Ternary-Bonsai-2-27B-vllm` | ~30 tok/s | ~130K |
+| llama.cpp (PrismML) | `Ternary-Bonsai-2-27B-PQ2_0.gguf` | ~35 tok/s | ~245K |
+
