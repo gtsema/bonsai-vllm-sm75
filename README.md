@@ -49,7 +49,7 @@ sudo docker run --gpus '"device=0"' -it --rm \
 | Runtime | Формат модели | Скорость | Контекст |
 |---|---|---:|---:|
 | vLLM (этот форк) | `Ternary-Bonsai-2-27B-vllm` | ~30 tok/s | ~130K |
-| llama.cpp (PrismML) | `Ternary-Bonsai-2-27B-PQ2_0.gguf` | ~25 tok/s | ~245K |
+| llama.cpp (PrismML) | `Ternary-Bonsai-2-27B-PQ2_0.gguf` | ~35 tok/s | ~245K |
 
 Оба варианта — это одна и та же модель (Bonsai 2 27B), только разные представления весов под разные рантаймы; слово в слово выводы между ними не совпадут.
 ---
