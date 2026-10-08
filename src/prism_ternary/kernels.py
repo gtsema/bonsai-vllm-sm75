@@ -65,7 +65,7 @@ def dequantize(weight: torch.Tensor, scales: torch.Tensor, dtype: torch.dtype) -
 def ternary_linear(
     x: torch.Tensor, weight: torch.Tensor, scales: torch.Tensor, signs: torch.Tensor
 ) -> torch.Tensor:
-    rotated = _cuda().signed_hadamard(x.reshape(-1, x.shape[-1]), signs)
+    rotated = _cuda().signed_hadamard(x.reshape(-1, x.shape[-1]).contiguous(), signs)
     y = (
         _cuda().ternary_gemv(rotated, weight, scales)
         if rotated.shape[0] <= GEMV_MAX_ROWS
